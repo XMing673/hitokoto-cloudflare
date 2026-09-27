@@ -1,0 +1,86 @@
+name: Update sentences
+
+on:
+  schedule:
+    # GitHub Actions cron uses UTC.
+    # Run every Sunday, then gate below so the actual sync happens every 14 days.
+    - cron: "0 3 * * 0"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: update-sentences
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check 14-day cadence
+        id: cadence
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "Manual run requested; syncing now."
+            exit 0
+          fi
+
+          anchor=$(date -u -d "2026-09-27 00:00:00 UTC" +%s)
+          now=$(date -u +%s)
+          weeks=$(( (now - anchor) / 604800 ))
+
+          if (( weeks >= 0 && weeks % 2 == 0 )); then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            echo "This is a scheduled sync week."
+          else
+            echo "run=false" >> "$GITHUB_OUTPUT"
+            echo "Skipping this week; next eligible run is on the 14-day cadence."
+          fi
+
+      - name: Fetch upstream sentences
+        if: steps.cadence.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          upstream="$RUNNER_TEMP/sentences-bundle"
+          git clone --depth 1 https://github.com/hitokoto-osc/sentences-bundle.git "$upstream"
+
+          for key in {a..l}; do
+            file="$upstream/sentences/$key.json"
+            test -s "$file"
+            jq -e 'type == "array"' "$file" >/dev/null
+          done
+
+          rsync -a --delete "$upstream/sentences/" sentences/
+
+      - name: Commit and push changes
+        if: steps.cadence.outputs.run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          git add sentences
+
+          if git diff --cached --quiet; then
+            echo "No sentence updates found."
+            exit 0
+          fi
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          git commit -m "chore: update sentences"
+          git pull --rebase origin main
+          git push origin HEAD:main
