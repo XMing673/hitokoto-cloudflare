@@ -106,6 +106,30 @@ function buildJavascriptResponse(sentence, selector) {
     return `(function hitokoto(){var hitokoto=${hitokotoText};var selector=${selectorText};try{var dom=document.querySelector(selector);if(dom){dom.innerText=hitokoto;}}catch(error){}})()`;
 }
 
+function escapeHtml(value) {
+    return value
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+}
+
+function buildBrowserPage(response) {
+    const json = escapeHtml(JSON.stringify(response, null, 2));
+
+    return `<!doctype html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>明域｜一言</title>
+    <link rel="icon" href="https://www.xming.cloud/assets/xming.ico">
+</head>
+<body>
+    <pre>${json}</pre>
+</body>
+</html>`;
+}
+
 export async function onRequest(context) {
     const { request, env } = context;
 
@@ -173,6 +197,18 @@ export async function onRequest(context) {
 
         const randomSentence = sentences[Math.floor(Math.random() * sentences.length)];
         const response = buildResponsePayload(randomSentence);
+
+        const acceptsHtml = request.headers.get("Accept")?.includes("text/html");
+        const isHomepage = url.pathname === "/" && url.search === "";
+
+        if (acceptsHtml && isHomepage) {
+            return new Response(buildBrowserPage(response), {
+                headers: {
+                    "Content-Type": "text/html; charset=UTF-8",
+                    ...responseHeaders,
+                },
+            });
+        }
 
         if (encodeType === "text") {
             const responseContent = callback
